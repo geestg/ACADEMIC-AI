@@ -1,0 +1,8 @@
+he table needs to ensure the data
+-- integrity.
+ALTER TABLE collection_metadata ADD COLUMN bool_value INTEGER;
+ALTER TABLE segment_metadata ADD COLUMN bool_value INTEGER;
+4eea7468935bf25d4604a0fed2366116ÅbGÇ=Msysdb00005-remove-topic.sqlite.sql-- Remove the topic column from the Collections and Segments tables
+
+ALTER TABLE collections DROP COLUMN topic;
+ALTER TABLE segments DROP COLUMN topic;
