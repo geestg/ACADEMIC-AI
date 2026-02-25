@@ -11,15 +11,18 @@ from app.rag import (
     chat_memory
 )
 
+from app.database import SessionLocal
+from app.models import DocumentMetadata, ChatLog
+
 app = FastAPI(
-    title="Academic AI RAG System",
-    description="Multi-Document Retrieval-Augmented Generation API",
-    version="1.0.0"
+    title="Academic Agentic AI System",
+    version="2.0"
 )
 
-# =========================
+# =====================================================
 # REQUEST SCHEMA
-# =========================
+# =====================================================
+
 class QuestionRequest(BaseModel):
     question: str
     filename: str | None = None
@@ -29,9 +32,10 @@ class AgentRequest(BaseModel):
     query: str
 
 
-# =========================
+# =====================================================
 # PDF TEXT EXTRACTION
-# =========================
+# =====================================================
+
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     try:
         pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
@@ -43,7 +47,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
                 text += page_text
 
         if not text.strip():
-            raise ValueError("PDF tidak mengandung teks yang dapat diekstrak.")
+            raise ValueError("PDF tidak mengandung teks.")
 
         return text
 
@@ -51,20 +55,21 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
         raise HTTPException(status_code=400, detail=f"Gagal membaca PDF: {str(e)}")
 
 
-# =========================
+# =====================================================
 # ROOT
-# =========================
+# =====================================================
+
 @app.get("/")
 def root():
     return {
-        "status": "Academic AI RAG Running",
-        "documents_loaded": len(chat_memory)
+        "status": "Agentic AI Academic System Running 🚀"
     }
 
 
-# =========================
-# UPLOAD PDF
-# =========================
+# =====================================================
+# UPLOAD PDF + SAVE METADATA
+# =====================================================
+
 @app.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)):
 
@@ -74,22 +79,44 @@ async def upload_pdf(file: UploadFile = File(...)):
     contents = await file.read()
     text = extract_text_from_pdf(contents)
 
+    # Simpan ke Vector DB (RAG)
     document_id = store_document(text, file.filename)
 
+    # Hitung jumlah chunk sederhana
+    chunk_count = len(text.split("\n\n"))
+
+    # Simpan metadata ke PostgreSQL
+    db = SessionLocal()
+    try:
+        metadata = DocumentMetadata(
+            filename=file.filename,
+            uploaded_by="system",  # nanti bisa diganti user login
+            chunk_count=chunk_count,
+            embedding_model="your-embedding-model"
+        )
+
+        db.add(metadata)
+        db.commit()
+
+    finally:
+        db.close()
+
     return {
-        "message": "Dokumen berhasil disimpan.",
+        "message": "Dokumen berhasil disimpan",
         "document_id": document_id,
         "filename": file.filename
     }
 
 
-# =========================
-# ASK QUESTION (STREAMING)
-# =========================
+# =====================================================
+# ASK QUESTION + SAVE CHAT LOG
+# =====================================================
+
 @app.post("/ask")
 async def ask_question(request: QuestionRequest):
 
     def generate():
+
         full_answer = ""
 
         stream, metas = query_rag_stream(
@@ -103,7 +130,7 @@ async def ask_question(request: QuestionRequest):
                 full_answer += content
                 yield content
 
-        # Simpan riwayat percakapan
+        # Simpan ke memory (runtime)
         chat_memory.append({
             "role": "user",
             "content": request.question
@@ -114,7 +141,22 @@ async def ask_question(request: QuestionRequest):
             "content": full_answer
         })
 
-        # Tampilkan sumber referensi
+        # 🔥 SAVE TO DATABASE (Chat Log)
+        db = SessionLocal()
+        try:
+            log = ChatLog(
+                user_query=request.question,
+                ai_response=full_answer,
+                related_document=request.filename
+            )
+
+            db.add(log)
+            db.commit()
+
+        finally:
+            db.close()
+
+        # Tambahkan sumber
         yield "\n\n---\nSources:\n"
         for meta in metas:
             yield f"- {meta['filename']}\n"
@@ -122,18 +164,20 @@ async def ask_question(request: QuestionRequest):
     return StreamingResponse(generate(), media_type="text/plain")
 
 
-# =========================
+# =====================================================
 # RESET MEMORY
-# =========================
+# =====================================================
+
 @app.post("/reset-memory")
 def reset_memory():
     chat_memory.clear()
-    return {"message": "Riwayat percakapan telah dihapus."}
+    return {"message": "Chat memory cleared."}
 
 
-# =========================
+# =====================================================
 # AGENT ENDPOINT
-# =========================
+# =====================================================
+
 @app.post("/agent")
 def agent_endpoint(request: AgentRequest):
 
